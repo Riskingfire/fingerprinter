@@ -1,0 +1,110 @@
+{
+  "version": "V0.4",
+  "features": [
+    {
+      "id": "ui",
+      "name": "User Interface",
+      "description": "The complete Fingerprinter UI and all ui_*.py modules.",
+      "default": true,
+      "includes": [
+        "ui_class",
+        "ui_compare",
+        "ui_detect",
+        "ui_keys",
+        "ui_resources",
+        "ui_screen",
+        "ui_tk"
+      ]
+    },
+    {
+      "id": "integrations",
+      "name": "Integrations",
+      "description": "Integration backend",
+      "default": false,
+      "includes": [
+        "integrations",
+        "ui_integrations"
+      ]
+    },
+    {
+      "id": "server",
+      "name": "Server",
+      "description": "Server synchronization",
+      "default": false,
+      "includes": [
+        "server_sync",
+        "ui_server"
+      ]
+    }
+  ],
+  "modules": [
+    {
+      "id": "integrations",
+      "name": "Integrations Backend",
+      "file": "integrations.py",
+      "type": "python"
+    },
+    {
+      "id": "server_sync",
+      "name": "Server Synchronization",
+      "file": "server_sync.py",
+      "type": "python"
+    },
+    {
+      "id": "ui_class",
+      "name": "Class Guide",
+      "file": "ui_class.py",
+      "type": "python"
+    },
+    {
+      "id": "ui_compare",
+      "name": "Account Comparison",
+      "file": "ui_compare.py",
+      "type": "python"
+    },
+    {
+      "id": "ui_detect",
+      "name": "Player Detection",
+      "file": "ui_detect.py",
+      "type": "python"
+    },
+    {
+      "id": "ui_integrations",
+      "name": "Integrations Interface",
+      "file": "ui_integrations.py",
+      "type": "python",
+      "requires": ["integrations"]
+    },
+    {
+      "id": "ui_keys",
+      "name": "Keyboard Statistics",
+      "file": "ui_keys.py",
+      "type": "python"
+    },
+    {
+      "id": "ui_resources",
+      "name": "Resource Monitor",
+      "file": "ui_resources.py",
+      "type": "python"
+    },
+    {
+      "id": "ui_screen",
+      "name": "Screen Interface",
+      "file": "ui_screen.py",
+      "type": "python"
+    },
+    {
+      "id": "ui_server",
+      "name": "Server Interface",
+      "file": "ui_server.py",
+      "type": "python",
+      "requires": ["server_sync"]
+    },
+    {
+      "id": "ui_tk",
+      "name": "Shared Tkinter UI",
+      "file": "ui_tk.py",
+      "type": "python"
+    }
+  ]
+}
