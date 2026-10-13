@@ -62,7 +62,7 @@
     },
     {
       "id": "calibration",
-      "name": "larity Calibration",
+      "name": "Clarity Calibration",
       "description": "Population-relative similarity scoring with a Recalibrate button, so keybind-driven similarity does not make every account look the same.",
       "default": false,
       "includes": [
