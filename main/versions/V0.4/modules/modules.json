@@ -20,7 +20,7 @@
       "id": "advanced_ui",
       "name": "Advanced UI",
       "description": "Advanced interface features including history, library, modules, notes, and zoom tools.",
-      "default": false,
+      "default": true,
       "includes": [
         "ui_history",
         "ui_library",
