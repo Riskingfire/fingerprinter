@@ -242,7 +242,7 @@
     {
       "id": "similarity_calibration_ui",
       "name": "Similarity Calibration Interface",
-      "file": "similarity_calibration_ui.py",
+      "file": "ui_calibration.py",
       "type": "python",
       "requires": [
         "similarity_calibration",
