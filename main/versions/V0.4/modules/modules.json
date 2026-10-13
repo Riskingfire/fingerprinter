@@ -61,6 +61,16 @@
       ]
     },
     {
+      "id": "calibration",
+      "name": "Similarity Calibration",
+      "description": "Population-relative similarity scoring with a Recalibrate button, so keybind-driven similarity does not make every account look the same.",
+      "default": false,
+      "includes": [
+        "similarity_calibration",
+        "similarity_calibration_ui"
+      ]
+    },
+    {
       "id": "base_only",
       "name": "No optional modules (game and server bases)",
       "description": "Install just the chosen base. Use this for the game and server bases, which do not use modules.",
@@ -220,6 +230,22 @@
       "type": "python",
       "requires": [
         "server_sync",
+        "ui_tk"
+      ]
+    },
+    {
+      "id": "similarity_calibration",
+      "name": "Similarity Calibration",
+      "file": "similarity_calibration.py",
+      "type": "python"
+    },
+    {
+      "id": "similarity_calibration_ui",
+      "name": "Similarity Calibration Interface",
+      "file": "similarity_calibration_ui.py",
+      "type": "python",
+      "requires": [
+        "similarity_calibration",
         "ui_tk"
       ]
     },
