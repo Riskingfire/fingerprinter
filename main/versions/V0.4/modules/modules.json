@@ -62,12 +62,12 @@
     },
     {
       "id": "calibration",
-      "name": "Similarity Calibration",
+      "name": "larity Calibration",
       "description": "Population-relative similarity scoring with a Recalibrate button, so keybind-driven similarity does not make every account look the same.",
       "default": false,
       "includes": [
         "similarity_calibration",
-        "similarity_calibration_ui"
+        "ui_calibration"
       ]
     },
     {
@@ -240,7 +240,7 @@
       "type": "python"
     },
     {
-      "id": "similarity_calibration_ui",
+      "id": "ui_calibration",
       "name": "Similarity Calibration Interface",
       "file": "ui_calibration.py",
       "type": "python",
