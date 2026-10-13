@@ -25,7 +25,7 @@ OWNER = "Riskingfire"
 REPO = "fingerprinter"
 BRANCH = "main"
 
-# Installer self-update & Asset repository details (using fingerprinter)
+# Installer self-update & Asset repository details
 INSTALLER_OWNER = "Riskingfire"
 INSTALLER_REPO = "fingerprinter"
 INSTALLER_BRANCH = "main"
@@ -47,13 +47,12 @@ NO_STANDALONE = "(select a file)"
 
 # standalones/<language>/<file>   - language folder names -> canonical language
 LANGUAGE_FOLDERS = {"python": "python", "py": "python", "cpp": "cpp", "c++": "cpp", "cplusplus": "cpp"}
-# used when standalones/ has no language folders: guess the language from the extension
 LANGUAGE_EXTENSIONS = {
     ".py": "python", ".pyw": "python",
     ".cpp": "cpp", ".cc": "cpp", ".cxx": "cpp", ".c": "cpp",
 }
 PYTHON_EXTENSIONS = (".py", ".pyw")
-SOURCE_EXTENSIONS = (".py", ".pyw", ".c", ".cc", ".cxx", ".cpp", ".h", ".hpp")  # deleted with the cache after a build
+SOURCE_EXTENSIONS = (".py", ".pyw", ".c", ".cc", ".cxx", ".cpp", ".h", ".hpp")
 CPP_COMPILABLE = (".cpp", ".cc", ".cxx", ".c")
 
 DEFAULT_INSTALL = os.path.join(
@@ -129,6 +128,11 @@ def get_file_sha256(path):
     return sha256_hash.hexdigest()
 
 
+def get_saved_hash_path():
+    """Returns the path to the local version hash tracker file."""
+    return Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve().with_suffix(".version_hash")
+
+
 def safe_relative_path(path):
     path = path.replace("\\", "/").strip("/")
     parts = path.split("/")
@@ -172,7 +176,6 @@ def version_sort_key(value):
 # ============================================================
 
 def create_desktop_shortcut(target_path, shortcut_name="Fingerprinter", icon_path=None):
-    """Creates a Windows desktop shortcut using a VBS script fallback."""
     try:
         desktop = Path(os.path.join(os.path.expanduser("~"), "Desktop"))
         shortcut_path = desktop / f"{shortcut_name}.lnk"
@@ -199,7 +202,6 @@ def create_desktop_shortcut(target_path, shortcut_name="Fingerprinter", icon_pat
 
 
 def find_python():
-    """Interpreter used to run PyInstaller."""
     if not getattr(sys, "frozen", False):
         return sys.executable
 
@@ -336,13 +338,10 @@ class FingerprinterInstaller:
         self.root = root
         self.root.title("Fingerprinter Setup")
         
-        # Download app.ico for UI and taskbar usage
         self.icon_cache_path = Path(tempfile.gettempdir()) / "app_fingerprinter.ico"
         try:
             ico_data = download_bytes(f"{ASSET_RAW_ROOT}/app.ico")
             self.icon_cache_path.write_bytes(ico_data)
-            
-            # Set window icon and taskbar icon
             self.root.iconbitmap(str(self.icon_cache_path))
         except Exception as e:
             print(f"Could not load app.ico: {e}")
@@ -422,15 +421,14 @@ class FingerprinterInstaller:
 
         self.root.after(100, self._poll_events)
         
-        # Check for installer updates first, then load repository tree
         threading.Thread(target=self._check_and_perform_installer_update, daemon=True).start()
         self._start_background(self._load_repository, "Connecting to GitHub...")
 
     def _check_and_perform_installer_update(self):
-        """Checks the single installer file in Riskingfire/fingerprinter/installers."""
+        """Checks the single installer file and compares it against saved local version hash tracker."""
         try:
             current_file = Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve()
-            local_hash = get_file_sha256(current_file)
+            hash_tracker_path = get_saved_hash_path()
 
             contents = github_get_json(INSTALLER_API_ROOT)
             if not isinstance(contents, list) or not contents:
@@ -451,7 +449,15 @@ class FingerprinterInstaller:
             script_bytes = download_bytes(remote_download_url)
             remote_hash = hashlib.sha256(script_bytes).hexdigest()
 
-            if remote_hash != local_hash:
+            # Check if we have already recorded this remote hash locally
+            saved_hash = ""
+            if hash_tracker_path.exists():
+                saved_hash = hash_tracker_path.read_text(encoding="utf-8").strip()
+
+            local_file_hash = get_file_sha256(current_file)
+
+            # Only prompt if remote hash differs from BOTH our current running file AND our last recorded updated hash
+            if remote_hash != local_file_hash and remote_hash != saved_hash:
                 self.events.put(("status", "New installer version found!"))
                 
                 should_update = tk.BooleanVar(value=False)
@@ -488,11 +494,19 @@ class FingerprinterInstaller:
                         )
 
                         if new_exe_path and new_exe_path.exists():
+                            # Save the remote hash to file so it doesn't trigger an infinite loop
+                            hash_tracker_path.write_text(remote_hash, encoding="utf-8")
+
                             self.events.put(("status", "Launching updated installer..."))
                             subprocess.Popen([str(new_exe_path), "--delete-old", str(current_file)])
                             self.root.after(100, self.root.destroy)
                     finally:
                         shutil.rmtree(cache_dir, ignore_errors=True)
+            else:
+                # If hashes match, ensure tracker file is synchronized
+                if not hash_tracker_path.exists() and local_file_hash == remote_hash:
+                    hash_tracker_path.write_text(remote_hash, encoding="utf-8")
+
         except Exception as e:
             print(f"Installer update check failed: {e}")
 
