@@ -14,7 +14,7 @@ What a recalibration does
      log-stretched 0-100 display score (display only, never used for flagging)
   5. refuses to flag anyone when scores are not informative
 
-This file has no tkinter code. The window lives in similarity_calibration_ui.py,
+This file has no tkinter code. The window lives in ui_calibration.py,
 which is only loaded when the ``ui_tk`` module is present.
 
 Services provided : "calibration"  (CalibrationService)
