@@ -31,14 +31,13 @@
     },
     {
       "id": "export_and_session",
-      "name": "Export & Session Log",
+      "name": "Export Tools & Session Log",
       "description": "Export utilities and session logging tools with their UI interfaces.",
       "default": false,
       "includes": [
         "export_tools",
         "session_log",
-        "ui_export",
-        "ui_session"
+        "ui_export"
       ]
     },
     {
@@ -71,7 +70,7 @@
     },
     {
       "id": "session_log",
-      "name": "Session Log Backend",
+      "name": "Session Log",
       "file": "session_log.py",
       "type": "python"
     },
@@ -81,13 +80,6 @@
       "file": "ui_export.py",
       "type": "python",
       "requires": ["export_tools", "ui_tk"]
-    },
-    {
-      "id": "ui_session",
-      "name": "UI Session Log Interface",
-      "file": "ui_session.py",
-      "type": "python",
-      "requires": ["session_log", "ui_tk"]
     },
     {
       "id": "ui_history",
