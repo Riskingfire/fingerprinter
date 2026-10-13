@@ -25,17 +25,18 @@ OWNER = "Riskingfire"
 REPO = "fingerprinter"
 BRANCH = "main"
 
-# Installer self-update repository details
+# Installer self-update & Asset repository details (using fingerprinter)
 INSTALLER_OWNER = "Riskingfire"
-INSTALLER_REPO = "fingerprints"
+INSTALLER_REPO = "fingerprinter"
 INSTALLER_BRANCH = "main"
 INSTALLER_PATH = "installers"
 
 API_ROOT = f"https://api.github.com/repos/{OWNER}/{REPO}"
 RAW_ROOT = f"https://raw.githubusercontent.com/{OWNER}/{REPO}/{BRANCH}"
 
-INSTALLER_API_ROOT = f"https://api.github.com/repos/{INSTALLER_OWNER}/{INSTALLER_REPO}/{INSTALLER_PATH}"
+INSTALLER_API_ROOT = f"https://api.github.com/repos/{INSTALLER_OWNER}/{INSTALLER_REPO}/contents/{INSTALLER_PATH}?ref={INSTALLER_BRANCH}"
 INSTALLER_RAW_ROOT = f"https://raw.githubusercontent.com/{INSTALLER_OWNER}/{INSTALLER_REPO}/{INSTALLER_BRANCH}/{INSTALLER_PATH}"
+ASSET_RAW_ROOT = f"https://raw.githubusercontent.com/{INSTALLER_OWNER}/{INSTALLER_REPO}/{INSTALLER_BRANCH}"
 
 VERSIONS_DIR = "main/versions"
 BASES_DIR = "bases"
@@ -170,18 +171,20 @@ def version_sort_key(value):
 # Shortcut and EXE Creation Helpers
 # ============================================================
 
-def create_desktop_shortcut(target_path, shortcut_name="Fingerprinter"):
+def create_desktop_shortcut(target_path, shortcut_name="Fingerprinter", icon_path=None):
     """Creates a Windows desktop shortcut using a VBS script fallback."""
     try:
         desktop = Path(os.path.join(os.path.expanduser("~"), "Desktop"))
         shortcut_path = desktop / f"{shortcut_name}.lnk"
         
+        icon_line = f'oLink.IconLocation = "{icon_path}, 0"' if icon_path and Path(icon_path).exists() else ""
         vbs_script = f"""
         Set oWS = WScript.CreateObject("WScript.Shell")
         sLinkFile = "{shortcut_path}"
         Set oLink = oWS.CreateShortcut(sLinkFile)
         oLink.TargetPath = "{target_path}"
         oLink.WorkingDirectory = "{Path(target_path).parent}"
+        {icon_line}
         oLink.Save
         """
         vbs_path = desktop / "create_shortcut.vbs"
@@ -257,7 +260,7 @@ def _imports_used(version_dir):
     return sorted(found)
 
 
-def compile_to_exe(entry_script, version_dir, log=lambda message: None, exe_name="Fingerprinter", output_dir=None, full_app=True):
+def compile_to_exe(entry_script, version_dir, log=lambda message: None, exe_name="Fingerprinter", output_dir=None, full_app=True, icon_path=None):
     version_dir = Path(version_dir)
     output_dir = Path(output_dir) if output_dir else version_dir
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -296,6 +299,9 @@ def compile_to_exe(entry_script, version_dir, log=lambda message: None, exe_name
         "--specpath", str(work),
         "--paths", str(version_dir),
     ]
+    if icon_path and Path(icon_path).exists():
+        cmd += ["--icon", str(icon_path)]
+
     if full_app:
         cmd += ["--collect-submodules", "pynput"]
 
@@ -329,12 +335,19 @@ class FingerprinterInstaller:
     def __init__(self, root):
         self.root = root
         self.root.title("Fingerprinter Setup")
-        _icon_png = "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAABPUlEQVR4nO2aIUsEURRGvxnHaFqwKDbjZrO/YMMmq2DyB9hWmGrXTbIYTBbxD+wG0ybRIrth2GAQBYMYVHZsg8nmPQPvO+09Bu7hwH1psm7/tFbC5LQAjQPQAjQOQAvQOAAtQOMAtACNA9ACNA5AC9A4AC1A4wC0AI0D0AI0DkAL0DgALUDjALQATfIBishh08sD3c+fm/N4Wuni5q65r2upWMl1MrrVw6/v/pPQAF/fS+0Prv+8397qqDzc1d7RVYhT61ZgtnjVxvps2LzWBdjpbuqxegmbF7oCq0Wu87LXnMvhRNXTW3OfSXr/+NTx2TjMqXVvQDStW4Fokg+Q+ReZxHEAWoDGAWgBGgegBWgcgBagcQBagMYBaAEaB6AFaByAFqBxAFqAxgFoARoHoAVoHIAWoHEAWoAm+QA/cHhAFqnhHacAAAAASUVORK5CYII="
+        
+        # Download app.ico for UI and taskbar usage
+        self.icon_cache_path = Path(tempfile.gettempdir()) / "app_fingerprinter.ico"
         try:
-            self._app_icon = tk.PhotoImage(data=_icon_png)
-            self.root.iconphoto(True, self._app_icon)
-        except tk.TclError:
-            self._app_icon = None
+            ico_data = download_bytes(f"{ASSET_RAW_ROOT}/app.ico")
+            self.icon_cache_path.write_bytes(ico_data)
+            
+            # Set window icon and taskbar icon
+            self.root.iconbitmap(str(self.icon_cache_path))
+        except Exception as e:
+            print(f"Could not load app.ico: {e}")
+            self.icon_cache_path = None
+
         self.root.geometry("940x680")
         self.root.minsize(820, 600)
         self.root.configure(bg=BG)
@@ -414,7 +427,7 @@ class FingerprinterInstaller:
         self._start_background(self._load_repository, "Connecting to GitHub...")
 
     def _check_and_perform_installer_update(self):
-        """Checks the single installer file in Riskingfire/fingerprints/installers."""
+        """Checks the single installer file in Riskingfire/fingerprinter/installers."""
         try:
             current_file = Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve()
             local_hash = get_file_sha256(current_file)
@@ -423,7 +436,6 @@ class FingerprinterInstaller:
             if not isinstance(contents, list) or not contents:
                 return
 
-            # Find the single installer file in the folder
             remote_file_info = None
             for item in contents:
                 if item.get("type") == "file" and item.get("name", "").endswith((".py", ".exe")):
@@ -436,7 +448,6 @@ class FingerprinterInstaller:
             remote_filename = remote_file_info["name"]
             remote_download_url = remote_file_info["download_url"]
             
-            # Fetch remote content bytes to check its sha256 hash
             script_bytes = download_bytes(remote_download_url)
             remote_hash = hashlib.sha256(script_bytes).hexdigest()
 
@@ -472,7 +483,8 @@ class FingerprinterInstaller:
                             log=log_func,
                             exe_name=Path(remote_filename).stem,
                             output_dir=current_file.parent,
-                            full_app=False
+                            full_app=False,
+                            icon_path=self.icon_cache_path
                         )
 
                         if new_exe_path and new_exe_path.exists():
@@ -1732,6 +1744,7 @@ class FingerprinterInstaller:
                             exe_name=exe_name,
                             output_dir=target_dir,
                             full_app=standalone is None,
+                            icon_path=self.icon_cache_path
                         )
                 except Exception:
                     if use_cache:
@@ -1756,7 +1769,7 @@ class FingerprinterInstaller:
                 and main_script_path
                 and Path(main_script_path).suffix.lower() in (".exe", ".py", ".pyw")
             ):
-                create_desktop_shortcut(str(main_script_path), shortcut_name=exe_name)
+                create_desktop_shortcut(str(main_script_path), shortcut_name=exe_name, icon_path=self.icon_cache_path)
                 self.events.put(("log", "Created desktop shortcut."))
 
             self.events.put(("complete", written, str(target_dir)))
