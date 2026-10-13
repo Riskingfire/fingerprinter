@@ -45,7 +45,6 @@ FP_DIR = "fp"              # required core package  -> <install>/fp/
 MODULES_FOLDER = "modules"  # optional modules       -> <install>/modules/
 NO_STANDALONE = "(select a file)"
 
-# standalones/<language>/<file>   - language folder names -> canonical language
 LANGUAGE_FOLDERS = {"python": "python", "py": "python", "cpp": "cpp", "c++": "cpp", "cplusplus": "cpp"}
 LANGUAGE_EXTENSIONS = {
     ".py": "python", ".pyw": "python",
@@ -118,14 +117,6 @@ def download_bytes(url):
         raise InstallerError(
             f"Download failed:\n{url}\n\n{exc}"
         ) from exc
-
-
-def get_file_sha256(path):
-    sha256_hash = hashlib.sha256()
-    with open(path, "rb") as f:
-        for byte_block in iter(lambda: f.read(4096), b""):
-            sha256_hash.update(byte_block)
-    return sha256_hash.hexdigest()
 
 
 def get_saved_hash_path():
@@ -425,7 +416,7 @@ class FingerprinterInstaller:
         self._start_background(self._load_repository, "Connecting to GitHub...")
 
     def _check_and_perform_installer_update(self):
-        """Checks the single installer file and compares it against saved local version hash tracker."""
+        """Checks the remote Python installer script hash against the locally stored Python script hash (.version_hash)."""
         try:
             current_file = Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve()
             hash_tracker_path = get_saved_hash_path()
@@ -446,18 +437,22 @@ class FingerprinterInstaller:
             remote_filename = remote_file_info["name"]
             remote_download_url = remote_file_info["download_url"]
             
+            # Download the remote Python script bytes and get its SHA-256 hash
             script_bytes = download_bytes(remote_download_url)
             remote_hash = hashlib.sha256(script_bytes).hexdigest()
 
-            # Check if we have already recorded this remote hash locally
+            # Read the last recorded Python script hash from local storage
             saved_hash = ""
             if hash_tracker_path.exists():
                 saved_hash = hash_tracker_path.read_text(encoding="utf-8").strip()
 
-            local_file_hash = get_file_sha256(current_file)
+            # If this is the first time running or the remote Python hash differs from the saved Python hash
+            if remote_hash != saved_hash:
+                # If there's no saved hash file yet (first run), initialize it with the current running state so it doesn't prompt immediately on fresh download
+                if not hash_tracker_path.exists():
+                    hash_tracker_path.write_text(remote_hash, encoding="utf-8")
+                    return
 
-            # Only prompt if remote hash differs from BOTH our current running file AND our last recorded updated hash
-            if remote_hash != local_file_hash and remote_hash != saved_hash:
                 self.events.put(("status", "New installer version found!"))
                 
                 should_update = tk.BooleanVar(value=False)
@@ -494,7 +489,7 @@ class FingerprinterInstaller:
                         )
 
                         if new_exe_path and new_exe_path.exists():
-                            # Save the remote hash to file so it doesn't trigger an infinite loop
+                            # Save the remote Python script hash locally
                             hash_tracker_path.write_text(remote_hash, encoding="utf-8")
 
                             self.events.put(("status", "Launching updated installer..."))
@@ -502,10 +497,6 @@ class FingerprinterInstaller:
                             self.root.after(100, self.root.destroy)
                     finally:
                         shutil.rmtree(cache_dir, ignore_errors=True)
-            else:
-                # If hashes match, ensure tracker file is synchronized
-                if not hash_tracker_path.exists() and local_file_hash == remote_hash:
-                    hash_tracker_path.write_text(remote_hash, encoding="utf-8")
 
         except Exception as e:
             print(f"Installer update check failed: {e}")
