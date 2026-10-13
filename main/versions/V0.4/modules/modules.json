@@ -4,7 +4,7 @@
     {
       "id": "ui",
       "name": "User Interface",
-      "description": "The complete Fingerprinter UI and all ui_*.py modules.",
+      "description": "The complete Fingerprinter UI and all basic ui_*.py modules.",
       "default": true,
       "includes": [
         "ui_class",
@@ -14,6 +14,31 @@
         "ui_resources",
         "ui_screen",
         "ui_tk"
+      ]
+    },
+    {
+      "id": "advanced_ui",
+      "name": "Advanced UI",
+      "description": "Advanced interface features including history, library, modules, notes, and zoom tools.",
+      "default": false,
+      "includes": [
+        "ui_history",
+        "ui_library",
+        "ui_modules",
+        "ui_notes",
+        "ui_zoom"
+      ]
+    },
+    {
+      "id": "export_and_session",
+      "name": "Export & Session Log",
+      "description": "Export utilities and session logging tools with their UI interfaces.",
+      "default": false,
+      "includes": [
+        "export_tools",
+        "session_log",
+        "ui_export",
+        "ui_session"
       ]
     },
     {
@@ -39,6 +64,67 @@
   ],
   "modules": [
     {
+      "id": "export_tools",
+      "name": "Export Tools Backend",
+      "file": "export_tools.py",
+      "type": "python"
+    },
+    {
+      "id": "session_log",
+      "name": "Session Log Backend",
+      "file": "session_log.py",
+      "type": "python"
+    },
+    {
+      "id": "ui_export",
+      "name": "UI Export Interface",
+      "file": "ui_export.py",
+      "type": "python",
+      "requires": ["export_tools", "ui_tk"]
+    },
+    {
+      "id": "ui_session",
+      "name": "UI Session Log Interface",
+      "file": "ui_session.py",
+      "type": "python",
+      "requires": ["session_log", "ui_tk"]
+    },
+    {
+      "id": "ui_history",
+      "name": "UI History",
+      "file": "ui_history.py",
+      "type": "python",
+      "requires": ["ui_tk"]
+    },
+    {
+      "id": "ui_library",
+      "name": "UI Library",
+      "file": "ui_library.py",
+      "type": "python",
+      "requires": ["ui_tk"]
+    },
+    {
+      "id": "ui_modules",
+      "name": "UI Modules Manager",
+      "file": "ui_modules.py",
+      "type": "python",
+      "requires": ["ui_tk"]
+    },
+    {
+      "id": "ui_notes",
+      "name": "UI Notes",
+      "file": "ui_notes.py",
+      "type": "python",
+      "requires": ["ui_tk"]
+    },
+    {
+      "id": "ui_zoom",
+      "name": "UI Zoom Controls",
+      "file": "ui_zoom.py",
+      "type": "python",
+      "requires": ["ui_tk"]
+    },
+    {
       "id": "integrations",
       "name": "Integrations Backend",
       "file": "integrations.py",
@@ -54,51 +140,57 @@
       "id": "ui_class",
       "name": "Class Guide",
       "file": "ui_class.py",
-      "type": "python"
+      "type": "python",
+      "requires": ["ui_tk"]
     },
     {
       "id": "ui_compare",
       "name": "Account Comparison",
       "file": "ui_compare.py",
-      "type": "python"
+      "type": "python",
+      "requires": ["ui_tk"]
     },
     {
       "id": "ui_detect",
       "name": "Player Detection",
       "file": "ui_detect.py",
-      "type": "python"
+      "type": "python",
+      "requires": ["ui_tk"]
     },
     {
       "id": "ui_integrations",
       "name": "Integrations Interface",
       "file": "ui_integrations.py",
       "type": "python",
-      "requires": ["integrations"]
+      "requires": ["integrations", "ui_tk"]
     },
     {
       "id": "ui_keys",
       "name": "Keyboard Statistics",
       "file": "ui_keys.py",
-      "type": "python"
+      "type": "python",
+      "requires": ["ui_tk"]
     },
     {
       "id": "ui_resources",
       "name": "Resource Monitor",
       "file": "ui_resources.py",
-      "type": "python"
+      "type": "python",
+      "requires": ["ui_tk"]
     },
     {
       "id": "ui_screen",
       "name": "Screen Interface",
       "file": "ui_screen.py",
-      "type": "python"
+      "type": "python",
+      "requires": ["ui_tk"]
     },
     {
       "id": "ui_server",
       "name": "Server Interface",
       "file": "ui_server.py",
       "type": "python",
-      "requires": ["server_sync"]
+      "requires": ["server_sync", "ui_tk"]
     },
     {
       "id": "ui_tk",
