@@ -437,18 +437,14 @@ class FingerprinterInstaller:
             remote_filename = remote_file_info["name"]
             remote_download_url = remote_file_info["download_url"]
             
-            # Download the remote Python script bytes and get its SHA-256 hash
             script_bytes = download_bytes(remote_download_url)
             remote_hash = hashlib.sha256(script_bytes).hexdigest()
 
-            # Read the last recorded Python script hash from local storage
             saved_hash = ""
             if hash_tracker_path.exists():
                 saved_hash = hash_tracker_path.read_text(encoding="utf-8").strip()
 
-            # If this is the first time running or the remote Python hash differs from the saved Python hash
             if remote_hash != saved_hash:
-                # If there's no saved hash file yet (first run), initialize it with the current running state so it doesn't prompt immediately on fresh download
                 if not hash_tracker_path.exists():
                     hash_tracker_path.write_text(remote_hash, encoding="utf-8")
                     return
@@ -489,7 +485,6 @@ class FingerprinterInstaller:
                         )
 
                         if new_exe_path and new_exe_path.exists():
-                            # Save the remote Python script hash locally
                             hash_tracker_path.write_text(remote_hash, encoding="utf-8")
 
                             self.events.put(("status", "Launching updated installer..."))
@@ -1953,15 +1948,20 @@ class FingerprinterInstaller:
 
 
 def handle_old_installer_cleanup():
-    """Deletes the old installer executable if passed via --delete-old."""
+    """Deletes the old installer executable once the new one has launched."""
     if "--delete-old" in sys.argv:
         try:
             idx = sys.argv.index("--delete-old")
             if idx + 1 < len(sys.argv):
                 old_path = Path(sys.argv[idx + 1])
-                if old_path.exists():
-                    time.sleep(1.5)
-                    old_path.unlink()
+                # Attempt to delete the old file with a small retry loop to allow process termination
+                for _ in range(10):
+                    try:
+                        if old_path.exists():
+                            old_path.unlink()
+                        break
+                    except PermissionError:
+                        time.sleep(0.5)
         except Exception as e:
             print(f"Could not delete old installer: {e}")
 
