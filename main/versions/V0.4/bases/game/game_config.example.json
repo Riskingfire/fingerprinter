@@ -1,0 +1,11 @@
+{
+  "player": "account-id-or-name",
+  "window_titles": ["My Game"],
+  "processes": ["mygame.exe"],
+  "pids": [],
+  "track_keys": true,
+  "autosave_secs": 300,
+  "upload_secs": 900,
+  "data_dir": null,
+  "server": {"url": "https://your-server.onrender.com", "key": ""}
+}

@@ -3,6 +3,7 @@
 Files starting with "_" are ignored by the loader, so this one never runs as shipped.
 """
 NAME = "my_module"                      # optional; defaults to the file name
+TITLE = "My module"                  # optional: name in the installer's component list (python tools/make_manifest.py)
 DESCRIPTION = "What this module adds"   # shown by:  python fingerprinter.py modules
 REQUIRES = []                           # hard dependencies, e.g. ["ui_tk"]; skipped if one is missing
 OPTIONAL = []                           # soft: loaded before this one if present

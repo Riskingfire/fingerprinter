@@ -59,6 +59,13 @@
         "server_sync",
         "ui_server"
       ]
+    },
+    {
+      "id": "base_only",
+      "name": "No optional modules (game and server bases)",
+      "description": "Install just the chosen base. Use this for the game and server bases, which do not use modules.",
+      "default": false,
+      "includes": []
     }
   ],
   "modules": [
@@ -79,42 +86,56 @@
       "name": "UI Export Interface",
       "file": "ui_export.py",
       "type": "python",
-      "requires": ["export_tools", "ui_tk"]
+      "requires": [
+        "export_tools",
+        "ui_tk"
+      ]
     },
     {
       "id": "ui_history",
       "name": "UI History",
       "file": "ui_history.py",
       "type": "python",
-      "requires": ["ui_tk"]
+      "requires": [
+        "ui_tk",
+        "session_log"
+      ]
     },
     {
       "id": "ui_library",
       "name": "UI Library",
       "file": "ui_library.py",
       "type": "python",
-      "requires": ["ui_tk"]
+      "requires": [
+        "ui_tk"
+      ]
     },
     {
       "id": "ui_modules",
       "name": "UI Modules Manager",
       "file": "ui_modules.py",
       "type": "python",
-      "requires": ["ui_tk"]
+      "requires": [
+        "ui_tk"
+      ]
     },
     {
       "id": "ui_notes",
       "name": "UI Notes",
       "file": "ui_notes.py",
       "type": "python",
-      "requires": ["ui_tk"]
+      "requires": [
+        "ui_tk"
+      ]
     },
     {
       "id": "ui_zoom",
       "name": "UI Zoom Controls",
       "file": "ui_zoom.py",
       "type": "python",
-      "requires": ["ui_tk"]
+      "requires": [
+        "ui_tk"
+      ]
     },
     {
       "id": "integrations",
@@ -133,56 +154,74 @@
       "name": "Class Guide",
       "file": "ui_class.py",
       "type": "python",
-      "requires": ["ui_tk"]
+      "requires": [
+        "ui_tk"
+      ]
     },
     {
       "id": "ui_compare",
       "name": "Account Comparison",
       "file": "ui_compare.py",
       "type": "python",
-      "requires": ["ui_tk"]
+      "requires": [
+        "ui_tk"
+      ]
     },
     {
       "id": "ui_detect",
       "name": "Player Detection",
       "file": "ui_detect.py",
       "type": "python",
-      "requires": ["ui_tk"]
+      "requires": [
+        "ui_tk"
+      ]
     },
     {
       "id": "ui_integrations",
       "name": "Integrations Interface",
       "file": "ui_integrations.py",
       "type": "python",
-      "requires": ["integrations", "ui_tk"]
+      "requires": [
+        "integrations",
+        "ui_tk"
+      ]
     },
     {
       "id": "ui_keys",
       "name": "Keyboard Statistics",
       "file": "ui_keys.py",
       "type": "python",
-      "requires": ["ui_tk"]
+      "requires": [
+        "ui_tk"
+      ]
     },
     {
       "id": "ui_resources",
       "name": "Resource Monitor",
       "file": "ui_resources.py",
       "type": "python",
-      "requires": ["ui_tk"]
+      "requires": [
+        "ui_tk"
+      ]
     },
     {
       "id": "ui_screen",
       "name": "Screen Interface",
       "file": "ui_screen.py",
       "type": "python",
-      "requires": ["ui_tk"]
+      "requires": [
+        "ui_tk"
+      ]
     },
     {
       "id": "ui_server",
       "name": "Server Interface",
       "file": "ui_server.py",
       "type": "python",
-      "requires": ["server_sync", "ui_tk"]
+      "requires": [
+        "server_sync",
+        "ui_tk"
+      ]
     },
     {
       "id": "ui_tk",

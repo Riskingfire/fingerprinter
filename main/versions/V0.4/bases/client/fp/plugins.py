@@ -101,7 +101,8 @@ def default_search_paths(extra=(), app_dir=None):
     env = os.environ.get("FP_MODULES_PATH", "")
     paths += [p for p in env.split(os.pathsep) if p]
     if app_dir:
-        paths.append(os.path.join(app_dir, "modules"))
+        paths.append(os.path.join(app_dir, "modules"))                    # installed layout: modules/ beside the launcher
+        paths.append(os.path.join(app_dir, "..", "..", "modules"))        # unzipped / repo layout: bases/client/ -> ../../modules
     paths.append(USER_MODULES_DIR)
     if getattr(sys, "frozen", False) and getattr(sys, "_MEIPASS", None):
         paths.append(os.path.join(sys._MEIPASS, "modules"))
