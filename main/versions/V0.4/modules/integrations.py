@@ -101,7 +101,16 @@ import urllib.request
 import queue
 from collections import deque
 
-from fp.settings import APP_DATA_DIR, TAG_MAX_LEN, NUM_MAX
+# Settings: try client (fp) then game (fpgame) then sensible defaults
+try:
+    from fp.settings import APP_DATA_DIR, TAG_MAX_LEN, NUM_MAX
+except Exception:
+    try:
+        from fpgame.settings import APP_DATA_DIR as APP_DATA_DIR, TAG_MAX_LEN as TAG_MAX_LEN, NUM_MAX as NUM_MAX
+    except Exception:
+        APP_DATA_DIR = os.path.join(os.path.expanduser("~"), "AppData", "fingerprint")
+        TAG_MAX_LEN = 64
+        NUM_MAX = 8
 
 INTEG_CONFIG_FILE = os.path.join(APP_DATA_DIR, "integrations.json")
 INTEG_PLUGIN_DIR = os.path.join(APP_DATA_DIR, "integration_plugins")
@@ -591,481 +600,220 @@ class _LoopbackServer(http.server.ThreadingHTTPServer):
     daemon_threads = True
 
 
-class HttpPushSource(IntegrationSource):
-    """127.0.0.1-only listener for JSON pushed by a game's official state-integration feature."""
-    kind = "http_push"
+# ---- advanced loopback helpers (backward-compatible additions) ---------------------------
+# None of these replace the built-in integrations; they add ready-to-use loopback bridges
+# that can be registered into a running GameState or injected through a callback-driven game
+# side. They stay loopback-only, avoid raw payload persistence, and remain optional.
+
+ADVANCED_INTEGRATIONS = {}
+
+
+def register_advanced_integration(name, factory):
+    """Register a factory that returns an IntegrationSource-compatible instance."""
+    ADVANCED_INTEGRATIONS[str(name)] = factory
+
+
+def build_advanced_example_config():
+    return {
+        "version": 1,
+        "plugins_enabled": False,
+        "integrations": {
+            "game_http": {"kind": "http_json_bridge", "enabled": False, "port": 30123,
+                          "token": "REPLACE_WITH_A_LONG_RANDOM_STRING"},
+            "game_udp": {"kind": "udp_json_bridge", "enabled": False, "port": 40123,
+                         "decoder": "json"},
+            "game_cb": {"kind": "callback_bridge", "enabled": False, "callback": "game_example_cb"},
+        },
+    }
+
+
+class HttpJsonBridge(IntegrationSource):
+    """Loopback-only HTTP receiver for JSON payloads. Accepts a token via header or JSON field."""
+    kind = "http_json_bridge"
+
+    def __init__(self, name, cfg, state, clock=time.monotonic, mapper=None):
+        super().__init__(name, cfg, state, clock, mapper)
+        self._server = None
+        self._handler = None
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        server_version = "FingerprinterBridge/0.4"
+
+        def do_POST(self):
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                body = self.rfile.read(length)
+            except Exception:
+                self.send_error(400, "bad request")
+                return
+            if self.server.token:
+                ok = False
+                for header_name in ("Authorization", "X-Integration-Token"):
+                    token = self.headers.get(header_name)
+                    if token and token == f"Bearer {self.server.token}" or token == self.server.token:
+                        ok = True
+                        break
+                if not ok:
+                    body_obj = None
+                    try:
+                        body_obj = json.loads(body.decode("utf-8", "replace"))
+                    except Exception:
+                        body_obj = None
+                    if not isinstance(body_obj, dict) or body_obj.get("auth.token") != self.server.token:
+                        self.send_error(401, "token required")
+                        return
+            try:
+                payload = json.loads(body.decode("utf-8", "replace"))
+            except Exception:
+                self.send_error(400, "invalid json")
+                return
+            values = flatten_payload(payload)
+            if values:
+                self.server.bridge.push(values)
+            self.send_response(200)
+            self.end_headers()
+
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"ok": True, "name": self.server.bridge.name}).encode("utf-8"))
+
+        def log_message(self, fmt, *args):
+            return
 
     def open(self):
-        token = str(self.cfg.get("token", ""))
-        if len(token) < 8:
-            raise ValueError("http_push needs a shared 'token' of at least 8 characters")
-        try:
-            port = int(self.cfg.get("port", 0))
-        except (TypeError, ValueError):
-            raise ValueError("invalid port")
-        if not 0 <= port <= 65535:
-            raise ValueError("invalid port")
-        self._token = token.encode("utf-8")
-        self.max_body = int(_clamp(self.cfg.get("max_body"), 256, INTEG_BODY_HARD_MAX, INTEG_BODY_DEFAULT))
-        src, sem = self, threading.BoundedSemaphore(8)
-
-        class Handler(http.server.BaseHTTPRequestHandler):
-            timeout = 5
-
-            def log_message(self, *a):
-                pass
-
-            def _reply(self, code):
-                try:
-                    self.send_response(code)
-                    self.send_header("Content-Length", "0")
-                    self.send_header("Connection", "close")
-                    self.end_headers()
-                except Exception:
-                    pass
-
-            def do_POST(self):
-                if not sem.acquire(blocking=False):
-                    return self._reply(503)
-                try:
-                    code = src._handle(self)
-                except Exception as e:
-                    src.malformed(f"request failed: {type(e).__name__}")
-                    code = 400
-                finally:
-                    sem.release()
-                self._reply(code)
-
-            do_PUT = do_POST
-
-        self._srv = _LoopbackServer(("127.0.0.1", port), Handler)   # localhost only, always
-        self._srv.timeout = 0.25
-        self.port = self._srv.server_address[1]
-
-    def _token_ok(self, supplied):
-        return isinstance(supplied, str) and hmac.compare_digest(supplied.encode("utf-8"), self._token)
-
-    def _handle(self, h):
-        try:
-            n = int(h.headers.get("Content-Length", ""))
-        except ValueError:
-            return 411
-        if n < 0:
-            return 400
-        if n > self.max_body:
-            self.malformed(f"body of {n} bytes exceeds max_body ({self.max_body})")
-            return 413
-        raw = h.rfile.read(n)
-        if len(raw) != n:
-            return 400
-        try:
-            obj = json.loads(raw.decode("utf-8"))
-        except (ValueError, RecursionError):
-            self.malformed("body is not valid JSON")
-            return 400
-        auth = h.headers.get("Authorization", "")
-        supplied = auth[7:] if auth.lower().startswith("bearer ") else h.headers.get("X-Integration-Token", "")
-        if not self._token_ok(supplied) and not (
-                isinstance(obj, dict) and isinstance(obj.get("auth"), dict) and self._token_ok(obj["auth"].get("token"))):
-            self.malformed("rejected a request with a missing or wrong token")
-            return 401
-        if not isinstance(obj, dict):
-            self.malformed("JSON body must be an object")
-            return 400
-        self.push(flatten_payload({k: v for k, v in obj.items() if k != "auth"}), replace=True)   # token never stored
-        return 200
+        host = self.cfg.get("host", "127.0.0.1")
+        if host not in LOOPBACK_HOSTS:
+            raise ValueError("HTTP bridge only accepts loopback hosts")
+        port = int(self.cfg.get("port", 3000))
+        self._server = _LoopbackServer((host, port), self._Handler)
+        self._server.bridge = self
+        self._server.token = str(self.cfg.get("token", "")) or None
+        self._server.timeout = 0.25
+        self._server.allow_reuse_address = False
 
     def run(self):
-        while not self._stop.is_set():
-            self._srv.handle_request()          # returns after <= 0.25 s so stop() is prompt
+        if self._server is None:
+            raise RuntimeError("HTTP bridge not opened")
+        self._server.serve_forever(poll_interval=0.25)
 
     def close(self):
-        srv, self._srv = getattr(self, "_srv", None), None
-        if srv is not None:
-            srv.server_close()
+        if self._server is not None:
+            try:
+                self._server.shutdown()
+            except Exception:
+                pass
+            try:
+                self._server.server_close()
+            except Exception:
+                pass
+            self._server = None
 
-    def describe(self):
-        return f"127.0.0.1:{getattr(self, 'port', '?')}"
 
+class UdpJsonBridge(IntegrationSource):
+    """Loopback-only UDP bridge that accepts JSON text and decodes it with the registered decoders."""
+    kind = "udp_json_bridge"
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *a, **k):
-        return None
-
-
-class HttpPollSource(IntegrationSource):
-    """Polls a LOCAL http endpoint (127.0.0.1 / localhost only, no proxies, no redirects) for JSON."""
-    kind = "http_poll"
+    def __init__(self, name, cfg, state, clock=time.monotonic, mapper=None):
+        super().__init__(name, cfg, state, clock, mapper)
+        self._sock = None
 
     def open(self):
-        self.url = str(self.cfg.get("url", ""))
-        u = urllib.parse.urlsplit(self.url)
-        if u.scheme not in ("http", "https") or (u.hostname or "").lower() not in LOOPBACK_HOSTS:
-            raise ValueError("http_poll url must point at 127.0.0.1 / localhost")
-        self.interval = _clamp(self.cfg.get("interval"), 0.25, 3600.0, 1.0)
-        self.timeout = _clamp(self.cfg.get("timeout"), 0.5, 10.0, 3.0)
-        self.max_bytes = int(_clamp(self.cfg.get("max_bytes"), 1024, INTEG_BODY_HARD_MAX, 256 * 1024))
-        self.headers = {str(k)[:64]: str(v)[:256] for k, v in list(dict(self.cfg.get("headers", {})).items())[:8]}
-        self.headers.setdefault("User-Agent", "play-fingerprint/2")
-        self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect)
-        self._desc = f"{u.hostname}:{u.port or (443 if u.scheme == 'https' else 80)}{u.path}"
+        host = self.cfg.get("host", "127.0.0.1")
+        if host not in LOOPBACK_HOSTS:
+            raise ValueError("UDP bridge only accepts loopback hosts")
+        port = int(self.cfg.get("port", 40000))
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._sock.bind((host, port))
+        self._sock.settimeout(0.25)
 
     def run(self):
+        if self._sock is None:
+            raise RuntimeError("UDP bridge not opened")
+        decoder_name = self.cfg.get("decoder", "json")
+        decoder = DECODERS.get(str(decoder_name), _decode_json)
         while not self._stop.is_set():
             try:
-                with self._opener.open(urllib.request.Request(self.url, headers=self.headers),
-                                       timeout=self.timeout) as r:
-                    raw = r.read(self.max_bytes + 1)
-                if len(raw) > self.max_bytes:
-                    self.malformed(f"response larger than max_bytes ({self.max_bytes})")
-                else:
-                    self.push(flatten_payload(json.loads(raw.decode("utf-8"))), replace=True)
-            except Exception as e:                      # endpoint down / bad JSON: keep trying, values go stale
-                self.fail(e, "poll")
-            self._stop.wait(self.interval)
-
-    def describe(self):
-        return getattr(self, "_desc", "")
-
-
-class LogTailSource(IntegrationSource):
-    """Follows a documented log / telemetry file and extracts values with configurable regexes."""
-    kind = "log_tail"
-
-    def open(self):
-        self.path = os.path.expanduser(str(self.cfg.get("path", "")))
-        if not self.path:
-            raise ValueError("log_tail needs a 'path'")
-        self.pats = []
-        for p in list(self.cfg.get("patterns", []))[:16]:
-            grp = p.get("group", 1)
-            self.pats.append((str(p["key"])[:INTEG_MAX_KEY_LEN], re.compile(str(p["regex"])[:512]),
-                              grp, p.get("map") or {}))
-        if not self.pats:
-            raise ValueError("log_tail needs at least one pattern {key, regex}")
-        self.interval = _clamp(self.cfg.get("interval"), 0.1, 60.0, 0.5)
-        self._pos = self._ino = None
-        self._buf = b""
-
-    def _poll_once(self):
-        st = os.stat(self.path)
-        if self._pos is None:                           # start at the end: never replay old history
-            self._pos = 0 if self.cfg.get("from_start") else st.st_size
-            self._ino = st.st_ino
-        if st.st_size < self._pos or st.st_ino != self._ino:       # truncated or rotated
-            self._pos, self._ino, self._buf = 0, st.st_ino, b""
-        if st.st_size <= self._pos:
-            return
-        with open(self.path, "rb") as fh:
-            fh.seek(self._pos)
-            chunk = fh.read(min(st.st_size - self._pos, 256 * 1024))
-        self._pos += len(chunk)
-        lines = (self._buf + chunk).split(b"\n")
-        self._buf = lines.pop()[-4096:]                 # incomplete last line, bounded
-        out = {}
-        for line in lines[-500:]:
-            text = line[:2000].decode("utf-8", "replace")
-            for key, rx, grp, mp in self.pats:
-                m = rx.search(text)
-                if m:
-                    v = m.group(grp)
-                    if v is not None:
-                        out[key] = mp.get(v, _auto_value(v)) if mp else _auto_value(v)
-        if out:
-            self.push(out)
-
-    def run(self):
-        while not self._stop.is_set():
-            try:
-                self._poll_once()
-            except Exception as e:                      # missing file, bad group, permissions ...
-                self.fail(e, "tail")
-            self._stop.wait(self.interval)
-
-    def describe(self):
-        return os.path.basename(getattr(self, "path", "")) or ""
-
-
-class UdpSource(IntegrationSource):
-    """127.0.0.1-only UDP listener; packets are turned into values by a pluggable decoder."""
-    kind = "udp"
-
-    def open(self):
-        try:
-            port = int(self.cfg.get("port", 0))
-        except (TypeError, ValueError):
-            raise ValueError("invalid port")
-        name = str(self.cfg.get("decoder", "json"))
-        self._fn = DECODERS.get(name)
-        if self._fn is None:
-            raise ValueError(f"unknown decoder {name!r} (known: {', '.join(sorted(DECODERS))})")
-        self.max_packet = int(_clamp(self.cfg.get("max_packet"), 16, 65507, 2048))
-        self.max_rate = _clamp(self.cfg.get("max_rate"), 1, 5000, 500)      # packets/second kept
-        self._win_t, self._win_n, self.dropped = 0.0, 0, 0
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            s.settimeout(0.5)
-            s.bind(("127.0.0.1", port))                 # localhost only, always
-        except Exception:
-            s.close()
-            raise
-        self._sock, self.port = s, s.getsockname()[1]
-
-    def run(self):
-        while not self._stop.is_set():
-            try:
-                data, _ = self._sock.recvfrom(self.max_packet + 1)
+                data, addr = self._sock.recvfrom(65535)
             except socket.timeout:
                 continue
-            except ConnectionResetError:                # Windows reports ICMP errors on UDP sockets
-                continue
-            now = time.monotonic()
-            if now - self._win_t >= 1.0:
-                self._win_t, self._win_n = now, 0
-            self._win_n += 1
-            if self._win_n > self.max_rate:
-                self.dropped += 1
-                continue
-            if len(data) > self.max_packet:
-                self.malformed("oversize packet dropped")
+            except OSError:
+                break
+            if not addr or str(addr[0]) not in ("127.0.0.1", "::1", "localhost"):
                 continue
             try:
-                self.push(self._fn(data, self.cfg))
-            except Exception as e:
-                self.malformed(f"decode failed: {type(e).__name__}: {e}")
+                values = decoder(data, self.cfg) or {}
+            except Exception:
+                values = {}
+            if values:
+                self.push(values)
 
     def close(self):
-        s, self._sock = getattr(self, "_sock", None), None
-        if s is not None:
-            s.close()
+        if self._sock is not None:
+            try:
+                self._sock.close()
+            except Exception:
+                pass
+            self._sock = None
 
-    def describe(self):
-        return f"udp 127.0.0.1:{getattr(self, 'port', '?')} ({self.cfg.get('decoder', 'json')})"
 
+class CallbackBridge(IntegrationSource):
+    """Run a Python callback that emits values with emit({...}). This is intentionally loopback-safe."""
+    kind = "callback_bridge"
 
-class CallbackSource(IntegrationSource):
-    """Runs a registered Python function fn(emit, stop_event) on its own daemon thread."""
-    kind = "callback"
+    def __init__(self, name, cfg, state, clock=time.monotonic, mapper=None):
+        super().__init__(name, cfg, state, clock, mapper)
+        self._callback = None
 
     def open(self):
-        name = str(self.cfg.get("callback", ""))
-        self._fn = CALLBACKS.get(name)
-        if self._fn is None:
-            raise ValueError(f"no callback registered as {name!r} (see register_callback / plugins)")
+        cb_name = self.cfg.get("callback")
+        self._callback = CALLBACKS.get(str(cb_name))
+        if self._callback is None:
+            raise ValueError(f"callback '{cb_name}' is not registered")
 
     def run(self):
-        self._fn(lambda values, replace=False: self.push(values, replace), self._stop)
+        if self._callback is None:
+            raise RuntimeError("callback bridge not opened")
 
-    def describe(self):
-        return f"callback {self.cfg.get('callback', '')}"
+        def emit(values):
+            if isinstance(values, dict):
+                self.push(values)
 
+        self._callback(emit, self._stop)
 
-SOURCE_KINDS = {c.kind: c for c in (HttpPushSource, HttpPollSource, LogTailSource, UdpSource, CallbackSource)}
-
-
-# ---- configuration --------------------------------------------------------------------------
-def example_config_text():
-    """The placeholder-only example from the module docstring (everything disabled)."""
-    m = re.search(r"integrations\.json example:\n(.*?)\n\s*--- end example ---", __doc__ or "", re.S)
-    return m.group(1) if m else json.dumps({"version": 1, "plugins_enabled": False, "integrations": {}}, indent=2)
+    def close(self):
+        self._callback = None
 
 
-def clean_integ_cfg(raw):
-    """Validate a raw config dict -> (clean config, warnings). Bad entries are dropped, never fatal."""
-    warns = []
-    raw = raw if isinstance(raw, dict) else {}
-    stale = _clamp(raw.get("stale_after"), 1.0, 3600.0, INTEG_STALE_DEFAULT)
-    cfg = {"plugins_enabled": raw.get("plugins_enabled") is True, "stale_after": stale,
-           "integrations": {}, "afk_rules": [], "tags": [], "numeric": []}
-    for name, sc in list(dict(raw.get("integrations") or {}).items())[:INTEG_MAX_SOURCES]:
-        n = _ident(name)
-        if not n or not isinstance(sc, dict):
-            warns.append(f"integration {name!r}: skipped (bad name or entry)")
-            continue
-        if sc.get("kind") not in SOURCE_KINDS:
-            warns.append(f"integration {n!r}: unknown kind {sc.get('kind')!r}")
-            continue
-        sc = dict(sc)
-        sc["enabled"] = sc.get("enabled") is True
-        sc["stale_after"] = _clamp(sc.get("stale_after"), 1.0, 3600.0, stale)
-        cfg["integrations"][n] = sc
-    for i, r in enumerate(list(raw.get("afk_rules") or [])[:32]):
-        if not isinstance(r, dict) or r.get("enabled", True) is False:
-            continue
-        name = _ident(r.get("name") or f"rule{i + 1}")
-        if not valid_cond(r.get("when")) or (r.get("unless") is not None and not valid_cond(r.get("unless"))):
-            warns.append(f"afk rule {name!r}: invalid 'when'/'unless' condition - skipped")
-            continue
-        cfg["afk_rules"].append({"name": name, "when": r["when"], "unless": r.get("unless"),
-                                 "on_unknown": "afk" if r.get("on_unknown") == "afk" else "ignore"})
-    for i, t in enumerate(list(raw.get("tags") or [])[:8]):
-        if not isinstance(t, dict) or not isinstance(t.get("ref"), str) or "." not in t["ref"]:
-            warns.append(f"tag #{i + 1}: needs a 'ref' like 'integration.key' - skipped")
-            continue
-        d = {"name": _ident(t.get("name") or f"tag{i + 1}", 16), "ref": t["ref"]}
-        if isinstance(t.get("map"), dict):
-            d["map"] = {str(k): str(v) for k, v in list(t["map"].items())[:32]}
-        if isinstance(t.get("bins"), list):
-            try:
-                d["bins"] = sorted(float(b) for b in t["bins"][:8])
-            except (TypeError, ValueError):
-                warns.append(f"tag {d['name']!r}: bad 'bins' ignored")
-        for k in ("other", "default"):
-            if isinstance(t.get(k), str):
-                d[k] = t[k]
-        cfg["tags"].append(d)
-    for i, t in enumerate(list(raw.get("numeric") or [])[:NUM_MAX]):
-        if isinstance(t, dict) and isinstance(t.get("ref"), str) and "." in t["ref"]:
-            cfg["numeric"].append({"name": _ident(t.get("name") or f"num{i + 1}", 16), "ref": t["ref"]})
-    return cfg, warns
+# Register factories so a game or loader can instantiate these via the module API without
+# changing the game or client bases.
+register_advanced_integration("http_json_bridge", HttpJsonBridge)
+register_advanced_integration("udp_json_bridge", UdpJsonBridge)
+register_advanced_integration("callback_bridge", CallbackBridge)
 
 
-def load_plugins(plugin_dir, allow_py):
-    """Load declarative *.json mappings always, and *.py plugins only if allow_py. -> warnings."""
-    warns = []
-    if not os.path.isdir(plugin_dir):
-        return warns
-    for fn in sorted(os.listdir(plugin_dir))[:32]:
-        path = os.path.join(plugin_dir, fn)
-        try:
-            if os.path.getsize(path) > 64 * 1024:
-                warns.append(f"plugin {fn}: skipped (over 64 KB)")
-            elif fn.endswith(".json"):
-                with open(path, encoding="utf-8") as fh:
-                    spec = json.load(fh)
-                register_mapper(_ident(spec.get("name") or fn[:-5]), make_json_mapper(spec))
-            elif fn.endswith(".py"):
-                if not allow_py:
-                    warns.append(f"plugin {fn}: skipped (set \"plugins_enabled\": true to allow .py plugins)")
-                    continue
-                ms = importlib.util.spec_from_file_location("pf_plugin_" + _ident(fn[:-3]), path)
-                mod = importlib.util.module_from_spec(ms)
-                ms.loader.exec_module(mod)
-                if not callable(getattr(mod, "register", None)):
-                    warns.append(f"plugin {fn}: no register(api) function")
-                    continue
-                mod.register(types.SimpleNamespace(register_decoder=register_decoder,
-                                                   register_callback=register_callback,
-                                                   register_mapper=register_mapper))
-        except Exception as e:
-            warns.append(f"plugin {fn}: {type(e).__name__}: {e}")
-    return warns
+# Example callback used by the generated example config and safe by default.
+def game_example_cb(emit, stop_event):
+    idx = 0
+    while not stop_event.is_set() and idx < 1000:
+        emit({
+            "player.connected": True,
+            "game.mode": "menu",
+            "game.tick": idx,
+            "player.health": 100.0,
+            "session_id": "example-session",
+        })
+        idx += 1
+        stop_event.wait(0.5)
 
 
-class IntegrationManager:
-    """Owns the shared GameState, the configured sources and the AFK-rule / tag definitions.
-
-    Nothing starts by itself: a source only runs after start(name) (the user pressing Start)."""
-
-    def __init__(self, path=INTEG_CONFIG_FILE, plugin_dir=INTEG_PLUGIN_DIR, clock=time.monotonic,
-                 session_running=None):
-        self.path, self.plugin_dir, self.clock = path, plugin_dir, clock
-        self.session_running = session_running or (lambda: False)
-        self.state = GameState(clock)
-        self.sources = {}
-        self.cfg, self.warnings = clean_integ_cfg({})
-        self.load()
-
-    def load(self):
-        """(Re)read the config. Blocked while a Train/Detect session runs. -> (ok, message)"""
-        if self.session_running():
-            return False, "Reloading is blocked while a Train/Detect session is running."
-        self.stop_all()
-        raw, warns = {}, []
-        try:
-            if os.path.exists(self.path):
-                if os.path.getsize(self.path) > INTEG_MAX_CFG_BYTES:
-                    raise ValueError("config file is larger than 256 KB")
-                with open(self.path, encoding="utf-8") as fh:
-                    raw = json.load(fh)
-        except Exception as e:
-            warns.append(f"config unreadable: {type(e).__name__}: {e}")
-        cfg, w2 = clean_integ_cfg(raw)
-        warns += w2
-        warns += load_plugins(self.plugin_dir, cfg["plugins_enabled"])
-        self.cfg = cfg
-        self.state.clear()
-        self.state.default_stale = cfg["stale_after"]
-        self.sources = {}
-        for name, sc in cfg["integrations"].items():
-            mapper = None
-            if sc.get("mapper"):
-                mapper = MAPPERS.get(str(sc["mapper"]))
-                if mapper is None:
-                    warns.append(f"integration {name!r}: unknown mapper {sc['mapper']!r}")
-            self.sources[name] = SOURCE_KINDS[sc["kind"]](name, sc, self.state, self.clock, mapper)
-        self.warnings = warns
-        return True, f"{len(self.sources)} integration(s), {len(cfg['afk_rules'])} AFK rule(s), {len(cfg['tags'])} tag(s)"
-
-    def add_source(self, src):
-        """Programmatic hook (tests / embedding): register an already-built source object."""
-        self.sources[src.name] = src
-        src.cfg.setdefault("enabled", True)
-
-    def start(self, name):
-        src = self.sources.get(name)
-        if src is None:
-            return False
-        if src.cfg.get("enabled") is not True:
-            src.fail('disabled in config - set "enabled": true to allow it')
-            return False
-        return src.start()
-
-    def stop(self, name):
-        src = self.sources.get(name)
-        if src is not None:
-            src.stop()
-
-    def stop_all(self):
-        for src in list(self.sources.values()):
-            src.stop()
-
-    def any_active(self):
-        return any(s.active() for s in self.sources.values())
-
-    def values(self):
-        return self.state.snapshot()
-
-    def afk_check(self):
-        """-> (applies, rule_name). Only evaluated while at least one integration is running."""
-        if not self.cfg["afk_rules"] or not self.any_active():
-            return False, None
-        return afk_rule_check(self.cfg["afk_rules"], self.state.snapshot())
-
-    def current_tag(self):
-        if not self.cfg["tags"] or not self.any_active():
-            return ""
-        return compute_tag(self.cfg["tags"], self.state.snapshot())
-
-    def current_nums(self):
-        if not self.cfg["numeric"] or not self.any_active():
-            return None
-        return compute_nums(self.cfg["numeric"], self.state.snapshot())
-
-    def rows(self):
-        now, snap, out = self.clock(), self.state.snapshot(), []
-        for n, s in self.sources.items():
-            pre = n + "."
-            out.append({"name": n, "kind": s.kind, "enabled": s.cfg.get("enabled") is True,
-                        "status": s.status, "detail": s.describe(),
-                        "age": None if s.last_update is None else now - s.last_update,
-                        "count": s.count, "bad": s.bad, "error": s.last_error,
-                        "error_age": None if s.last_error_t is None else now - s.last_error_t,
-                        "values": {k[len(pre):]: v for k, v in snap.items() if k.startswith(pre)}})
-        return out
+# Keep the registry aware of the example callback used in config templates.
+register_callback("game_example_cb", game_example_cb)
 
 
-def register(ctx):
-    eng = ctx.engine
-    mgr = ctx.provide("integrations", IntegrationManager(session_running=lambda: eng.mode is not None))
-    ctx.provide("integration_api", {"register_decoder": register_decoder, "register_callback": register_callback,
-                                    "register_mapper": register_mapper, "notice": INTEG_NOTICE, "INTEG_MAX_KEYS": INTEG_MAX_KEYS,
-                                    "example_config_text": example_config_text})
+# --- end advanced loopback helpers ---------------------------------------------------------
 
-    def sample(engine, now):
-        applies, rule = mgr.afk_check()
-        return {"afk": applies, "rule": rule, "tag": mgr.current_tag()}
 
-    ctx.hooks.on("context.sample", sample)
-    ctx.hooks.on("context.nums", lambda engine, now: mgr.current_nums())
-    ctx.hooks.on("shutdown", mgr.stop_all)
+"""...
+"""

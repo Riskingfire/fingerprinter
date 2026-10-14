@@ -5,6 +5,7 @@ REQUIRES = ['ui_tk', 'integrations']
 ORDER = 60
 
 import os
+import json
 
 from fp.settings import APP_DATA_DIR
 
@@ -27,6 +28,9 @@ class IntegrationsTab:
         ttk.Button(bar, text="Stop all", command=self.integ_stop_all).pack(side="left")
         self.integ_example_btn = ttk.Button(bar, text="Write example config", command=self.integ_write_example)
         self.integ_example_btn.pack(side="right")
+        # new: quick access to advanced example config (if supported by the backend)
+        self.integ_adv_example_btn = ttk.Button(bar, text="Show advanced example", command=self.integ_show_advanced_example)
+        self.integ_adv_example_btn.pack(side="right", padx=6)
         self.integ_reload_btn = ttk.Button(bar, text="Reload config", command=self.integ_reload)
         self.integ_reload_btn.pack(side="right", padx=6)
 
@@ -42,6 +46,16 @@ class IntegrationsTab:
         self.integ_tree.tag_configure("off", foreground="#888")
         self.integ_tree.pack(fill="x", pady=(8, 0))
         self.integ_tree.bind("<<TreeviewSelect>>", lambda _e: self._refresh_integ())
+
+        # quick info about any advanced loopback bridges available from the integrations module
+        try:
+            import integrations as _integrations_mod
+            adv = sorted(_integrations_mod.ADVANCED_INTEGRATIONS.keys()) if hasattr(_integrations_mod, 'ADVANCED_INTEGRATIONS') else []
+        except Exception:
+            adv = []
+        if adv:
+            ttk.Label(t, text="Advanced loopback bridges available: " + ", ".join(adv),
+                      foreground="#444", wraplength=1000, justify="left").pack(anchor="w", pady=(6, 0))
 
         self.integ_ctx = ttk.Label(t, text="", font=("Segoe UI", 10, "bold"), wraplength=1000, justify="left")
         self.integ_ctx.pack(anchor="w", pady=(10, 2))
@@ -101,6 +115,32 @@ class IntegrationsTab:
         except Exception as e:
             messagebox.showerror("Could not write", str(e))
 
+    def integ_show_advanced_example(self):
+        """Show the advanced example config (if the integrations backend exposes it)."""
+        try:
+            import integrations as _integrations_mod
+            if hasattr(_integrations_mod, 'build_advanced_example_config'):
+                cfg = _integrations_mod.build_advanced_example_config()
+                txt = json.dumps(cfg, indent=2)
+            elif hasattr(_integrations_mod, 'example_config_text'):
+                # fall back to existing text function
+                txt = _integrations_mod.example_config_text()
+            else:
+                messagebox.showinfo("Not available", "No advanced example config is available from the integrations module.")
+                return
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not retrieve advanced example: {e}")
+            return
+        # show in a simple dialog with selectable text
+        win = tk.Toplevel(self)
+        win.title("Advanced example config")
+        txtw = tk.Text(win, wrap="none", font=("Consolas", 10))
+        txtw.insert("1.0", txt)
+        txtw.config(state="disabled")
+        txtw.pack(fill="both", expand=True)
+        btn = ttk.Button(win, text="Close", command=win.destroy)
+        btn.pack()
+
     def _refresh_integ(self):
         """Refresh the integrations tab. Never raises."""
         try:
@@ -116,7 +156,7 @@ class IntegrationsTab:
                 err = ""
                 if r["error"]:
                     err = r["error"] + ("" if r["error_age"] is None else f"  ({r['error_age']:.0f}s ago)")
-                vals = (f"{r['kind']}  {r['detail']}".strip(), status, age,
+                vals = (f"{r['kind']}  {r['detail']}.".strip(), status, age,
                         f"{r['count']} ok / {r['bad']} bad", err)
                 tag = ("off",) if not r["enabled"] else (("running",) if r["status"] == "running"
                                                          else (("error",) if r["status"] == "error" else ()))
