@@ -599,4 +599,221 @@ class _LoopbackServer(http.server.ThreadingHTTPServer):
     allow_reuse_address = False      # never share a port (matters on Windows)
     daemon_threads = True
 
-...
+
+# ---- advanced loopback helpers (backward-compatible additions) ---------------------------
+# None of these replace the built-in integrations; they add ready-to-use loopback bridges
+# that can be registered into a running GameState or injected through a callback-driven game
+# side. They stay loopback-only, avoid raw payload persistence, and remain optional.
+
+ADVANCED_INTEGRATIONS = {}
+
+
+def register_advanced_integration(name, factory):
+    """Register a factory that returns an IntegrationSource-compatible instance."""
+    ADVANCED_INTEGRATIONS[str(name)] = factory
+
+
+def build_advanced_example_config():
+    return {
+        "version": 1,
+        "plugins_enabled": False,
+        "integrations": {
+            "game_http": {"kind": "http_json_bridge", "enabled": False, "port": 30123,
+                          "token": "REPLACE_WITH_A_LONG_RANDOM_STRING"},
+            "game_udp": {"kind": "udp_json_bridge", "enabled": False, "port": 40123,
+                         "decoder": "json"},
+            "game_cb": {"kind": "callback_bridge", "enabled": False, "callback": "game_example_cb"},
+        },
+    }
+
+
+class HttpJsonBridge(IntegrationSource):
+    """Loopback-only HTTP receiver for JSON payloads. Accepts a token via header or JSON field."""
+    kind = "http_json_bridge"
+
+    def __init__(self, name, cfg, state, clock=time.monotonic, mapper=None):
+        super().__init__(name, cfg, state, clock, mapper)
+        self._server = None
+        self._handler = None
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        server_version = "FingerprinterBridge/0.4"
+
+        def do_POST(self):
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                body = self.rfile.read(length)
+            except Exception:
+                self.send_error(400, "bad request")
+                return
+            if self.server.token:
+                ok = False
+                for header_name in ("Authorization", "X-Integration-Token"):
+                    token = self.headers.get(header_name)
+                    if token and token == f"Bearer {self.server.token}" or token == self.server.token:
+                        ok = True
+                        break
+                if not ok:
+                    body_obj = None
+                    try:
+                        body_obj = json.loads(body.decode("utf-8", "replace"))
+                    except Exception:
+                        body_obj = None
+                    if not isinstance(body_obj, dict) or body_obj.get("auth.token") != self.server.token:
+                        self.send_error(401, "token required")
+                        return
+            try:
+                payload = json.loads(body.decode("utf-8", "replace"))
+            except Exception:
+                self.send_error(400, "invalid json")
+                return
+            values = flatten_payload(payload)
+            if values:
+                self.server.bridge.push(values)
+            self.send_response(200)
+            self.end_headers()
+
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"ok": True, "name": self.server.bridge.name}).encode("utf-8"))
+
+        def log_message(self, fmt, *args):
+            return
+
+    def open(self):
+        host = self.cfg.get("host", "127.0.0.1")
+        if host not in LOOPBACK_HOSTS:
+            raise ValueError("HTTP bridge only accepts loopback hosts")
+        port = int(self.cfg.get("port", 3000))
+        self._server = _LoopbackServer((host, port), self._Handler)
+        self._server.bridge = self
+        self._server.token = str(self.cfg.get("token", "")) or None
+        self._server.timeout = 0.25
+        self._server.allow_reuse_address = False
+
+    def run(self):
+        if self._server is None:
+            raise RuntimeError("HTTP bridge not opened")
+        self._server.serve_forever(poll_interval=0.25)
+
+    def close(self):
+        if self._server is not None:
+            try:
+                self._server.shutdown()
+            except Exception:
+                pass
+            try:
+                self._server.server_close()
+            except Exception:
+                pass
+            self._server = None
+
+
+class UdpJsonBridge(IntegrationSource):
+    """Loopback-only UDP bridge that accepts JSON text and decodes it with the registered decoders."""
+    kind = "udp_json_bridge"
+
+    def __init__(self, name, cfg, state, clock=time.monotonic, mapper=None):
+        super().__init__(name, cfg, state, clock, mapper)
+        self._sock = None
+
+    def open(self):
+        host = self.cfg.get("host", "127.0.0.1")
+        if host not in LOOPBACK_HOSTS:
+            raise ValueError("UDP bridge only accepts loopback hosts")
+        port = int(self.cfg.get("port", 40000))
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._sock.bind((host, port))
+        self._sock.settimeout(0.25)
+
+    def run(self):
+        if self._sock is None:
+            raise RuntimeError("UDP bridge not opened")
+        decoder_name = self.cfg.get("decoder", "json")
+        decoder = DECODERS.get(str(decoder_name), _decode_json)
+        while not self._stop.is_set():
+            try:
+                data, addr = self._sock.recvfrom(65535)
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            if not addr or str(addr[0]) not in ("127.0.0.1", "::1", "localhost"):
+                continue
+            try:
+                values = decoder(data, self.cfg) or {}
+            except Exception:
+                values = {}
+            if values:
+                self.push(values)
+
+    def close(self):
+        if self._sock is not None:
+            try:
+                self._sock.close()
+            except Exception:
+                pass
+            self._sock = None
+
+
+class CallbackBridge(IntegrationSource):
+    """Run a Python callback that emits values with emit({...}). This is intentionally loopback-safe."""
+    kind = "callback_bridge"
+
+    def __init__(self, name, cfg, state, clock=time.monotonic, mapper=None):
+        super().__init__(name, cfg, state, clock, mapper)
+        self._callback = None
+
+    def open(self):
+        cb_name = self.cfg.get("callback")
+        self._callback = CALLBACKS.get(str(cb_name))
+        if self._callback is None:
+            raise ValueError(f"callback '{cb_name}' is not registered")
+
+    def run(self):
+        if self._callback is None:
+            raise RuntimeError("callback bridge not opened")
+
+        def emit(values):
+            if isinstance(values, dict):
+                self.push(values)
+
+        self._callback(emit, self._stop)
+
+    def close(self):
+        self._callback = None
+
+
+# Register factories so a game or loader can instantiate these via the module API without
+# changing the game or client bases.
+register_advanced_integration("http_json_bridge", HttpJsonBridge)
+register_advanced_integration("udp_json_bridge", UdpJsonBridge)
+register_advanced_integration("callback_bridge", CallbackBridge)
+
+
+# Example callback used by the generated example config and safe by default.
+def game_example_cb(emit, stop_event):
+    idx = 0
+    while not stop_event.is_set() and idx < 1000:
+        emit({
+            "player.connected": True,
+            "game.mode": "menu",
+            "game.tick": idx,
+            "player.health": 100.0,
+            "session_id": "example-session",
+        })
+        idx += 1
+        stop_event.wait(0.5)
+
+
+# Keep the registry aware of the example callback used in config templates.
+register_callback("game_example_cb", game_example_cb)
+
+
+# --- end advanced loopback helpers ---------------------------------------------------------
+
+
+"""...
+"""
