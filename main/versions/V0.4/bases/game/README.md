@@ -45,7 +45,7 @@ same player is loaded and refined, so the fingerprint grows across sessions. Sav
 (a file that could not be uploaded is retried next run).
 
 ## Please read
-* **The API key.** The server has one key. Anything that holds it can read and change the ban list, so do not ship it in a
+* **The API key.** ~~The server has one key.~~(Updated server, has multiple keys with different permissions) Anything that holds it can read and change the ban list, so do not ship it in a
   game build. Upload through your own backend, or put an upload-only key on the server.
 * **Tell players.** It records mouse and keyboard timing and (unless `track_keys` is false / `--no-keys`) which keys are used,
   including keys pressed while typing in game chat. Mention it in your privacy notice.
